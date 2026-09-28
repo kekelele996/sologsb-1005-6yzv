@@ -1,6 +1,7 @@
 import { Injectable, OnDestroy } from '@angular/core'
 import { BehaviorSubject, map, type Observable } from 'rxjs'
-import type { Annotation, Claim, ClaimVersion, Feature, Paragraph, Position, Role, ValidationIssue, WorkbenchState } from './models'
+import type { Annotation, Claim, ClaimVersion, EvidenceStatus, Feature, OrphanMapping, Paragraph, Position, Role, SupportEvidence, ValidationIssue, WorkbenchState } from './models'
+import { evidenceStatusLabel } from './models'
 
 const STORAGE_KEY = 'patent-claim-mapping-workbench-v1'
 const POSITION_KEY = 'patent-claim-mapping-position-v1'
@@ -25,18 +26,32 @@ const initialFeatures: Feature[] = [
   { id: 'feature-e', claimId: 'claim-2', label: 'E · 对角线布置', text: '多个温湿度传感器沿柜体对角线布置', parentId: null, referenceIds: [], supportIds: ['para-0018'], ownerRole: 'author' },
   { id: 'feature-f', claimId: 'claim-3', label: 'F · 分级调节', text: '基于历史数据与当前数据的偏差分级调节除湿单元', parentId: null, referenceIds: [], supportIds: ['para-0024'], ownerRole: 'author' }
 ]
+const now = '2026-09-24T04:20:00.000Z'
+const initialEvidences: SupportEvidence[] = [
+  { id: 'evidence-a-0012', featureId: 'feature-a', paragraphId: 'para-0012', excerpt: '柜体1形成用于陈列文物的封闭空间。', status: 'verified', note: '限定柜体为封闭陈列空间。', updatedAt: now },
+  { id: 'evidence-b-0012', featureId: 'feature-b', paragraphId: 'para-0012', excerpt: '环境传感模块2安装于柜体内部，可采集温度、相对湿度等环境数据', status: 'verified', note: '支持“设置于柜体内”及温湿度采集。', updatedAt: now },
+  { id: 'evidence-b-0018', featureId: 'feature-b', paragraphId: 'para-0018', excerpt: '由此可降低局部气流造成的测量偏差。', status: 'unverified', note: '', updatedAt: now },
+  { id: 'evidence-c-0012', featureId: 'feature-c', paragraphId: 'para-0012', excerpt: '并将数据发送至控制模块3。', status: 'unverified', note: '仅体现数据发送，通信双向性见 [0031]。', updatedAt: now },
+  { id: 'evidence-c-0031', featureId: 'feature-c', paragraphId: 'para-0031', excerpt: '控制模块与传感模块之间可以采用有线或无线通信。', status: 'verified', note: '', updatedAt: now },
+  { id: 'evidence-d-0024', featureId: 'feature-d', paragraphId: 'para-0024', excerpt: '控制模块可比较当前湿度与预设区间，并结合历史变化趋势生成调节等级。', status: 'verified', note: '支持依据温湿度数据进行调节。', updatedAt: now },
+  { id: 'evidence-d-0040', featureId: 'feature-d', paragraphId: 'para-0040', excerpt: '控制模块根据温湿度数据自动调节柜体微环境。', status: 'review', note: '摘录疑似来自旧稿，请重新选取。', updatedAt: now },
+  { id: 'evidence-e-0018', featureId: 'feature-e', paragraphId: 'para-0018', excerpt: '多个温湿度传感器沿柜体对角线布置', status: 'unverified', note: '', updatedAt: now },
+  { id: 'evidence-f-0024', featureId: 'feature-f', paragraphId: 'para-0024', excerpt: '当偏差持续超过阈值时，控制模块启动除湿单元并提高调节频率。', status: 'verified', note: '支持偏差分级与除湿单元。', updatedAt: now }
+]
 const initialAnnotations: Annotation[] = [
   { id: 'annotation-1', featureId: 'feature-b', authorRole: 'examiner', authorName: '审查员 · 李岚', text: '“温湿度数据”是否包括露点等派生数据？建议在从属权利要求中限定。', updatedAt: '2026-09-24T03:10:00.000Z' },
   { id: 'annotation-2', featureId: 'feature-d', authorRole: 'author', authorName: '代理人 · 陈昊', text: '[0024] 已支持分级调节，发布前补充除湿单元与通信模块的连接关系。', updatedAt: '2026-09-24T04:05:00.000Z' }
 ]
 function demoState(): WorkbenchState {
   return {
-    claims: initialClaims, paragraphs: initialParagraphs, features: initialFeatures,
+    claims: initialClaims, paragraphs: initialParagraphs, features: initialFeatures, evidences: initialEvidences,
     annotations: initialAnnotations, orphanMappings: [], versions: [],
     role: 'author', currentUserRole: 'author', selectedClaimId: 'claim-1', selectedFeatureId: 'feature-b', activeTab: 'mapping'
   }
 }
 function clone<T>(value: T): T { return structuredClone(value) }
+/** 忽略全部空白字符后比对，使中文段落中的空格、换行不影响摘录定位 */
+function normalizeText(value: string): string { return value.replace(/\s+/g, '') }
 
 @Injectable({ providedIn: 'root' })
 export class WorkbenchService implements OnDestroy {
@@ -68,6 +83,24 @@ export class WorkbenchService implements OnDestroy {
   get snapshot(): WorkbenchState { return clone(this.stateSubject.value) }
   get canUndo(): boolean { return this.past.length > 0 }
   get canRedo(): boolean { return this.future.length > 0 }
+
+  /** 摘录必须是段落正文（忽略空白）的连续子串，否则视为失配 */
+  excerptMatches(paragraph: Paragraph | undefined, excerpt: string): boolean {
+    if (!paragraph || !excerpt.trim()) return false
+    return normalizeText(paragraph.text).includes(normalizeText(excerpt))
+  }
+
+  /** 实际生效状态：已核验记录一旦与当前正文失配，立即降为待复核，确认前不能算已核验 */
+  effectiveStatus(evidence: SupportEvidence, paragraphs: Paragraph[] = this.stateSubject.value.paragraphs): EvidenceStatus {
+    if (!evidence.excerpt.trim()) return 'unverified'
+    const paragraph = paragraphs.find(item => item.id === evidence.paragraphId)
+    if (!this.excerptMatches(paragraph, evidence.excerpt)) return 'review'
+    return evidence.status === 'verified' ? 'verified' : evidence.status === 'review' ? 'review' : 'unverified'
+  }
+
+  findEvidence(featureId: string, paragraphId: string, state: WorkbenchState = this.stateSubject.value): SupportEvidence | undefined {
+    return state.evidences.find(item => item.featureId === featureId && item.paragraphId === paragraphId)
+  }
 
   selectClaim(id: string): void {
     this.patchState(state => { state.selectedClaimId = id; state.selectedFeatureId = state.features.find(feature => feature.claimId === id)?.id || null })
@@ -117,7 +150,19 @@ export class WorkbenchService implements OnDestroy {
     if (this.stateSubject.value.role === 'viewer') return
     this.commit(state => {
       const paragraph = state.paragraphs.find(item => item.id === id)
-      if (paragraph) Object.assign(paragraph, patch)
+      if (!paragraph) return
+      const textChanged = patch.text !== undefined && patch.text !== paragraph.text
+      Object.assign(paragraph, patch)
+      if (textChanged) {
+        // 正文改动后，原已核验摘录可能失配，强制回到待核验以重新确认
+        state.evidences.forEach(evidence => {
+          if (evidence.paragraphId !== id) return
+          if (evidence.status === 'verified' && !this.excerptMatches(paragraph, evidence.excerpt)) {
+            evidence.status = 'unverified'
+            evidence.updatedAt = new Date().toISOString()
+          }
+        })
+      }
     })
   }
 
@@ -126,6 +171,7 @@ export class WorkbenchService implements OnDestroy {
     this.commit(state => {
       state.paragraphs = state.paragraphs.filter(item => item.id !== id)
       state.features.forEach(feature => { feature.supportIds = feature.supportIds.filter(paragraphId => paragraphId !== id) })
+      state.evidences = state.evidences.filter(item => item.paragraphId !== id)
       state.orphanMappings = state.orphanMappings.filter(item => item.paragraphId !== id)
     })
   }
@@ -156,10 +202,16 @@ export class WorkbenchService implements OnDestroy {
     this.commit(state => {
       const feature = state.features.find(item => item.id === id)
       if (!feature) return
-      feature.supportIds.forEach(paragraphId => state.orphanMappings.push({
-        id: `orphan-${Date.now()}-${paragraphId}`, featureLabel: feature.label, paragraphId,
-        reason: `技术特征“${feature.label}”已删除，但支持段落映射仍被保留。`
-      }))
+      // 移除特征：支持关系连同证据片段快照进入待清理清单，直到人工清理
+      feature.supportIds.forEach((paragraphId, index) => {
+        const evidence = state.evidences.find(item => item.featureId === id && item.paragraphId === paragraphId)
+        state.orphanMappings.push({
+          id: `orphan-${Date.now()}-${index}`, featureLabel: feature.label, paragraphId,
+          reason: `技术特征“${feature.label}”已删除，但支持段落映射与证据片段仍被保留。`,
+          excerpt: evidence?.excerpt || '', status: evidence ? this.effectiveStatus(evidence, state.paragraphs) : 'unverified', note: evidence?.note || ''
+        })
+      })
+      state.evidences = state.evidences.filter(item => item.featureId !== id)
       state.features = state.features.filter(item => item.id !== id)
       state.features.forEach(item => {
         item.referenceIds = item.referenceIds.filter(refId => refId !== id)
@@ -170,15 +222,62 @@ export class WorkbenchService implements OnDestroy {
     })
   }
 
+  /** 选中段落建立映射时同步建立一条独立证据片段；取消选择则一并移除（同一段落可被多特征分别引用） */
   toggleParagraphMapping(featureId: string, paragraphId: string): void {
     if (this.stateSubject.value.role === 'viewer') return
     this.commit(state => {
       const feature = state.features.find(item => item.id === featureId)
       if (!feature) return
       const index = feature.supportIds.indexOf(paragraphId)
-      if (index >= 0) feature.supportIds.splice(index, 1)
-      else feature.supportIds.push(paragraphId)
+      if (index >= 0) {
+        feature.supportIds.splice(index, 1)
+        state.evidences = state.evidences.filter(item => !(item.featureId === featureId && item.paragraphId === paragraphId))
+      } else {
+        feature.supportIds.push(paragraphId)
+        if (!this.findEvidence(featureId, paragraphId, state)) {
+          state.evidences.push({
+            id: `evidence-${Date.now()}-${state.evidences.length}`, featureId, paragraphId,
+            excerpt: '', status: 'unverified', note: '', updatedAt: new Date().toISOString()
+          })
+        }
+      }
       state.orphanMappings = state.orphanMappings.filter(item => item.paragraphId !== paragraphId)
+    })
+  }
+
+  updateEvidence(id: string, patch: Partial<Pick<SupportEvidence, 'excerpt' | 'note'>>): void {
+    if (this.stateSubject.value.role === 'viewer') return
+    this.commit(state => {
+      const evidence = state.evidences.find(item => item.id === id)
+      if (!evidence) return
+      if (patch.note !== undefined) evidence.note = patch.note
+      if (patch.excerpt !== undefined && patch.excerpt !== evidence.excerpt) {
+        // 重新摘录后必须重新核验，确认前一律不算已核验
+        evidence.excerpt = patch.excerpt
+        evidence.status = 'unverified'
+      }
+      evidence.updatedAt = new Date().toISOString()
+    })
+  }
+
+  confirmEvidence(id: string): void {
+    if (this.stateSubject.value.role === 'viewer') return
+    this.commit(state => {
+      const evidence = state.evidences.find(item => item.id === id)
+      if (!evidence) return
+      const paragraph = state.paragraphs.find(item => item.id === evidence.paragraphId)
+      evidence.status = this.excerptMatches(paragraph, evidence.excerpt) ? 'verified' : 'review'
+      evidence.updatedAt = new Date().toISOString()
+    })
+  }
+
+  resetEvidence(id: string): void {
+    if (this.stateSubject.value.role === 'viewer') return
+    this.commit(state => {
+      const evidence = state.evidences.find(item => item.id === id)
+      if (!evidence) return
+      evidence.status = 'unverified'
+      evidence.updatedAt = new Date().toISOString()
     })
   }
 
@@ -214,7 +313,7 @@ export class WorkbenchService implements OnDestroy {
     this.commit(state => {
       state.versions.unshift({
         id: `version-${Date.now()}`, name: name?.trim() || `快照 ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
-        createdAt: new Date().toISOString(), claims: clone(state.claims), features: clone(state.features)
+        createdAt: new Date().toISOString(), claims: clone(state.claims), features: clone(state.features), evidences: this.validEvidences(state)
       })
     })
   }
@@ -225,6 +324,11 @@ export class WorkbenchService implements OnDestroy {
       if (!version) return
       state.claims = clone(version.claims)
       state.features = clone(version.features)
+      // 恢复旧版本时带回证据片段：只保留仍能对应到现存特征与段落的片段，缺失映射补齐空片段
+      state.evidences = this.reconcileEvidences(state.features, clone(version.evidences || []), state.paragraphs)
+      state.features.forEach(feature => {
+        feature.supportIds = feature.supportIds.filter(paragraphId => state.paragraphs.some(paragraph => paragraph.id === paragraphId))
+      })
       if (!state.claims.some(claim => claim.id === state.selectedClaimId)) state.selectedClaimId = state.claims[0]?.id || ''
       state.selectedFeatureId = state.features.find(feature => feature.claimId === state.selectedClaimId)?.id || null
     })
@@ -265,15 +369,37 @@ export class WorkbenchService implements OnDestroy {
 
   exportCsv(): string {
     const state = this.stateSubject.value
-    const rows = state.features.map(feature => [
-      state.claims.find(claim => claim.id === feature.claimId)?.number || '', feature.label, feature.text,
-      state.features.find(item => item.id === feature.parentId)?.label || '',
-      feature.referenceIds.map(id => state.features.find(item => item.id === id)?.label || id).join('；'),
-      feature.supportIds.map(id => state.paragraphs.find(item => item.id === id)?.section || id).join('；')
-    ])
-    const csv = [['权利要求', '技术特征', '特征内容', '父级特征', '引用特征', '支持段落'], ...rows]
+    const rows: Array<Array<string | number>> = state.features.map(feature => {
+      const evidenceList = feature.supportIds
+        .map(paragraphId => ({ paragraphId, evidence: this.findEvidence(feature.id, paragraphId, state) }))
+        .map(({ paragraphId, evidence }) => [
+          state.claims.find(claim => claim.id === feature.claimId)?.number || '',
+          feature.label, feature.text,
+          state.features.find(item => item.id === feature.parentId)?.label || '',
+          feature.referenceIds.map(id => state.features.find(item => item.id === id)?.label || id).join('；'),
+          state.paragraphs.find(item => item.id === paragraphId)?.section || paragraphId,
+          evidence?.excerpt || '', evidence ? evidenceStatusLabel[this.effectiveStatus(evidence, state.paragraphs)] : evidenceStatusLabel.unverified,
+          evidence?.note || ''
+        ])
+      return evidenceList.length
+        ? evidenceList
+        : [[
+            state.claims.find(claim => claim.id === feature.claimId)?.number || '',
+            feature.label, feature.text,
+            state.features.find(item => item.id === feature.parentId)?.label || '',
+            feature.referenceIds.map(id => state.features.find(item => item.id === id)?.label || id).join('；'),
+            '', '', evidenceStatusLabel.unverified, ''
+          ]]
+    }).flat()
+    // 特征已删除但待清理的证据片段同样导出，便于离线核对
+    state.orphanMappings.forEach(orphan => rows.push([
+      '—', orphan.featureLabel, '（特征已删除，待清理）', '', '',
+      state.paragraphs.find(item => item.id === orphan.paragraphId)?.section || orphan.paragraphId,
+      orphan.excerpt, evidenceStatusLabel[orphan.status], orphan.note
+    ]))
+    const csv = [['权利要求', '技术特征', '特征内容', '父级特征', '引用特征', '支持段落', '证据摘录', '核验状态', '备注'], ...rows]
       .map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n')
-    return `\uFEFF${csv}`
+    return `﻿${csv}`
   }
 
   validate(state = this.stateSubject.value): ValidationIssue[] {
@@ -282,8 +408,17 @@ export class WorkbenchService implements OnDestroy {
       if (!feature.text.trim()) issues.push({ id: `empty-${feature.id}`, severity: 'warning', type: 'empty-feature', featureId: feature.id, title: `${feature.label} 内容为空`, detail: '请补全技术特征文字，避免映射对象不明确。' })
       if (!feature.supportIds.length) issues.push({ id: `support-${feature.id}`, severity: 'error', type: 'missing-support', featureId: feature.id, title: `${feature.label} 缺少说明书依据`, detail: '至少为一个说明书段落建立支持映射。' })
       if (this.hasReferenceCycle(feature, state.features)) issues.push({ id: `cycle-${feature.id}`, severity: 'error', type: 'cycle', featureId: feature.id, title: `${feature.label} 存在循环引用`, detail: '特征层级或引用关系形成闭环，请移除其中一条关系。' })
+      feature.supportIds.forEach(paragraphId => {
+        const evidence = this.findEvidence(feature.id, paragraphId, state)
+        const section = state.paragraphs.find(item => item.id === paragraphId)?.section || paragraphId
+        if (!evidence || !evidence.excerpt.trim()) {
+          issues.push({ id: `evidence-empty-${feature.id}-${paragraphId}`, severity: 'warning', type: 'evidence-empty', featureId: feature.id, paragraphId, title: `${feature.label} 缺少证据摘录`, detail: `${section} 已建立映射但未填写摘录片段，请选中段落后摘录支撑原句。` })
+        } else if (this.effectiveStatus(evidence, state.paragraphs) === 'review') {
+          issues.push({ id: `evidence-mismatch-${feature.id}-${paragraphId}`, severity: 'error', type: 'evidence-mismatch', featureId: feature.id, paragraphId, title: `${feature.label} 的摘录与 ${section} 失配`, detail: `摘录未在 ${section} 正文中找到（忽略空白的连续原文），状态为待复核；请重新选取片段并确认，确认前不能算已核验。` })
+        }
+      })
     }
-    state.orphanMappings.forEach(item => issues.push({ id: item.id, severity: 'warning', type: 'orphan-mapping', title: '存在待清理映射', detail: item.reason }))
+    state.orphanMappings.forEach(item => issues.push({ id: item.id, severity: 'warning', type: 'orphan-mapping', paragraphId: item.paragraphId, title: '存在待清理证据', detail: item.reason }))
     return issues
   }
 
@@ -299,6 +434,30 @@ export class WorkbenchService implements OnDestroy {
       return feature.referenceIds.some(visit)
     }
     return visit(start.id)
+  }
+
+  /** 以特征 supportIds 为准，补齐/去重证据片段，兼容旧存档与历史版本 */
+  private reconcileEvidences(features: Feature[], evidences: SupportEvidence[], paragraphs: Paragraph[]): SupportEvidence[] {
+    const result: SupportEvidence[] = []
+    const seen = new Set<string>()
+    features.forEach(feature => {
+      feature.supportIds
+        .filter(paragraphId => paragraphs.some(paragraph => paragraph.id === paragraphId))
+        .forEach(paragraphId => {
+          const key = `${feature.id}::${paragraphId}`
+          if (seen.has(key)) return
+          seen.add(key)
+          const existing = evidences.find(item => item.featureId === feature.id && item.paragraphId === paragraphId)
+          result.push(existing
+            ? { ...existing, excerpt: existing.excerpt || '', note: existing.note || '', status: existing.status || 'unverified' }
+            : { id: `evidence-${Date.now()}-${result.length}`, featureId: feature.id, paragraphId, excerpt: '', status: 'unverified', note: '', updatedAt: new Date().toISOString() })
+        })
+    })
+    return result
+  }
+
+  private validEvidences(state: WorkbenchState): SupportEvidence[] {
+    return clone(this.reconcileEvidences(state.features, state.evidences, state.paragraphs))
   }
 
   private commit(recipe: (state: WorkbenchState) => void): void {
@@ -326,7 +485,18 @@ export class WorkbenchService implements OnDestroy {
     if (typeof localStorage === 'undefined') return demoState()
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
-      return stored ? { ...demoState(), ...JSON.parse(stored) } : demoState()
+      if (!stored) return demoState()
+      const state: WorkbenchState = { ...demoState(), ...JSON.parse(stored) }
+      state.evidences = this.reconcileEvidences(state.features, state.evidences || [], state.paragraphs)
+      state.orphanMappings = (state.orphanMappings || []).map((item, index) => ({
+        ...item,
+        id: item.id || `orphan-migrated-${index}`,
+        excerpt: item.excerpt || '',
+        status: item.status || 'review',
+        note: item.note || ''
+      }))
+      state.versions = (state.versions || []).map(version => ({ ...version, evidences: this.reconcileEvidences(version.features, version.evidences || [], state.paragraphs) }))
+      return state
     } catch { return demoState() }
   }
 }

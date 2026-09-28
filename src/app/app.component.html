@@ -106,11 +106,15 @@
 
           <section class="panel support-panel">
             <div class="panel-heading"><span>说明书支持依据</span><span class="heading-actions"><p-badge [value]="selectedFeature?.supportIds?.length || 0" severity="success" /><p-button label="新增段落" icon="pi pi-plus" size="small" [disabled]="!canEditMainData" (onClick)="service.addParagraph()" /></span></div>
-            <p class="hint">选择段落即建立映射；取消选择会移除映射。只有至少一个段落时可消除“缺少依据”。</p>
+            <p class="hint">勾选段落即建立映射；每条映射须摘录支撑原句并核验。同一段落被多个特征引用时，摘录各自独立、互不覆盖。</p>
             <article *ngFor="let paragraph of state.paragraphs" class="paragraph-card" [class.mapped]="selectedFeature && isMapped(selectedFeature, paragraph.id)">
               <label>
                 <input type="checkbox" [checked]="selectedFeature && isMapped(selectedFeature, paragraph.id)" [disabled]="!selectedFeature || !canEditMainData" (change)="selectedFeature && service.toggleParagraphMapping(selectedFeature.id, paragraph.id)">
                 <span class="paragraph-label">{{ paragraph.section }}</span>
+                <span *ngIf="selectedFeature && evidenceFor(selectedFeature.id, paragraph.id) as evidence" class="evidence-chip" [ngClass]="'status-' + evidenceStatus(evidence)">
+                  <i class="pi" [class.pi-check-circle]="evidenceStatus(evidence) === 'verified'" [class.pi-exclamation-triangle]="evidenceStatus(evidence) === 'review'" [class.pi-hourglass]="evidenceStatus(evidence) === 'unverified'"></i>
+                  {{ evidenceStatusLabel(evidenceStatus(evidence)) }}
+                </span>
               </label>
               <div *ngIf="canEditMainData" class="paragraph-editor">
                 <input pInputText [value]="paragraph.section" aria-label="说明书段落编号" (change)="service.updateParagraph(paragraph.id, { section: $any($event.target).value })">
@@ -118,6 +122,31 @@
                 <p-button label="删除段落" icon="pi pi-trash" severity="danger" [text]="true" size="small" (onClick)="service.deleteParagraph(paragraph.id)" />
               </div>
               <p *ngIf="!canEditMainData">{{ paragraph.text }}</p>
+
+              <div class="evidence-block" *ngIf="selectedFeature as feature; else noFeatureForEvidence">
+                <ng-container *ngIf="isMapped(feature, paragraph.id); else unmappedHint">
+                  <div class="evidence-head">
+                    <strong>证据片段</strong>
+                    <small>对应 {{ feature.label }}</small>
+                  </div>
+                  <label class="evidence-field">摘录（支撑技术特征的原句）
+                    <textarea pTextarea rows="2" [value]="evidenceFor(feature.id, paragraph.id)?.excerpt || ''" [readonly]="!canEditMainData" [attr.aria-label]="'摘录 ' + paragraph.section" (change)="evidenceFor(feature.id, paragraph.id) && updateEvidenceField($any(evidenceFor(feature.id, paragraph.id)), 'excerpt', $event)"></textarea>
+                  </label>
+                  <div class="mismatch-warn" *ngIf="excerptMismatched(evidenceFor(feature.id, paragraph.id))">
+                    <i class="pi pi-exclamation-triangle"></i>
+                    <span>待复核：摘录未在 {{ paragraph.section }} 正文中找到（忽略空白的连续原文）。请核对 {{ paragraph.section }} 并重新选取片段，确认前不能算已核验。</span>
+                  </div>
+                  <label class="evidence-field">备注
+                    <input pInputText type="text" [value]="evidenceFor(feature.id, paragraph.id)?.note || ''" [readonly]="!canEditMainData" placeholder="如：支持“温湿度采集”，派生数据另见批注" (change)="evidenceFor(feature.id, paragraph.id) && updateEvidenceField($any(evidenceFor(feature.id, paragraph.id)), 'note', $event)">
+                  </label>
+                  <div class="evidence-actions" *ngIf="canEditMainData">
+                    <p-button label="确认核验" icon="pi pi-check" size="small" [disabled]="!evidenceFor(feature.id, paragraph.id)?.excerpt?.trim() || evidenceStatus(evidenceFor(feature.id, paragraph.id)) === 'verified'" (onClick)="confirmEvidence($any(evidenceFor(feature.id, paragraph.id)))" pTooltip="摘录需能在段落正文中找到，否则确认后仍为待复核" />
+                    <p-button label="重置状态" icon="pi pi-undo" size="small" severity="secondary" [text]="true" [disabled]="evidenceStatus(evidenceFor(feature.id, paragraph.id)) === 'unverified'" (onClick)="resetEvidence($any(evidenceFor(feature.id, paragraph.id)))" />
+                  </div>
+                </ng-container>
+                <ng-template #unmappedHint><p class="hint">勾选后可在此填写该特征在 {{ paragraph.section }} 的证据摘录。</p></ng-template>
+              </div>
+              <ng-template #noFeatureForEvidence></ng-template>
             </article>
           </section>
         </div>
@@ -125,8 +154,8 @@
         <div class="mapping-summary">
           <div><span>特征覆盖</span><strong>{{ claimFeatures.length }}</strong></div>
           <div><span>已建立依据</span><strong>{{ mappedFeatureCount }}</strong></div>
-          <div><span>待清理映射</span><strong>{{ state.orphanMappings.length }}</strong></div>
-          <div><span>批注总数</span><strong>{{ state.annotations.length }}</strong></div>
+          <div><span>证据已核验 / 待复核</span><strong>{{ verifiedEvidenceCount }} / {{ reviewEvidenceCount }}</strong></div>
+          <div><span>待清理证据</span><strong>{{ state.orphanMappings.length }}</strong></div>
         </div>
 
         <section class="panel annotation-panel" *ngIf="selectedFeature as feature">
@@ -196,8 +225,19 @@
           </div>
           <div *ngIf="!issues.length" class="empty-success large"><i class="pi pi-check-circle"></i><strong>所有权利要求均具备说明书支持且引用关系有效。</strong></div>
           <div class="orphan-area" *ngIf="state.orphanMappings.length">
-            <h3>已删除特征遗留的映射</h3>
-            <div class="orphan-row" *ngFor="let orphan of state.orphanMappings"><span>{{ orphan.reason }} 对应 {{ paragraphLabel(orphan.paragraphId) }}</span><p-button label="清理" size="small" severity="warn" (onClick)="service.clearOrphan(orphan.id)" /></div>
+            <h3>已删除特征遗留的证据片段</h3>
+            <div class="orphan-row" *ngFor="let orphan of state.orphanMappings">
+              <div class="orphan-info">
+                <div class="orphan-head">
+                  <strong>{{ orphan.featureLabel }}</strong>
+                  <span>{{ paragraphLabel(orphan.paragraphId) }}</span>
+                  <em class="evidence-chip" [ngClass]="'status-' + orphan.status">{{ orphanStatusLabel(orphan) }}</em>
+                </div>
+                <p class="orphan-excerpt">{{ orphan.excerpt || '（未填写摘录）' }}</p>
+                <small *ngIf="orphan.note">备注：{{ orphan.note }}</small>
+              </div>
+              <p-button label="清理" size="small" severity="warn" (onClick)="service.clearOrphan(orphan.id)" />
+            </div>
           </div>
         </section>
       </div>
@@ -216,9 +256,18 @@
           <dt>批注</dt><dd>{{ featureAnnotations.length }} 条</dd>
         </dl>
         <div class="quick-map">
-          <strong>支持映射</strong>
-          <span *ngFor="let id of feature.supportIds">{{ paragraphLabel(id) }}</span>
-          <em *ngIf="!feature.supportIds.length">尚未选择说明书段落</em>
+          <strong>支持映射与证据片段</strong>
+          <ng-container *ngIf="evidenceForFeature(feature).length; else noMappedEvidence">
+            <div class="quick-evidence" *ngFor="let item of evidenceForFeature(feature)">
+              <div class="quick-evidence-head">
+                <span>{{ item.paragraph.section }}</span>
+                <em class="evidence-chip" [ngClass]="'status-' + item.status">{{ evidenceStatusLabel(item.status) }}</em>
+              </div>
+              <p>{{ item.evidence?.excerpt || '（尚未摘录支撑原句）' }}</p>
+              <small *ngIf="item.evidence?.note">{{ item.evidence?.note }}</small>
+            </div>
+          </ng-container>
+          <ng-template #noMappedEvidence><em>尚未选择说明书段落</em></ng-template>
         </div>
       </section>
       <ng-template #noSelection><section class="panel empty-state">选择技术特征查看映射详情。</section></ng-template>

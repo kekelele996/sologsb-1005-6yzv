@@ -10,7 +10,8 @@ import { BadgeModule } from 'primeng/badge'
 import { DialogModule } from 'primeng/dialog'
 import { TooltipModule } from 'primeng/tooltip'
 import { Subscription } from 'rxjs'
-import type { Annotation, Claim, Feature, Role, ValidationIssue, WorkbenchState } from './models'
+import type { Annotation, Claim, EvidenceStatus, Feature, OrphanMapping, Paragraph, Role, SupportEvidence, ValidationIssue, WorkbenchState } from './models'
+import { evidenceStatusLabel } from './models'
 import { WorkbenchService } from './workbench.service'
 
 @Component({
@@ -77,6 +78,43 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   isMapped(feature: Feature, paragraphId: string): boolean { return feature.supportIds.includes(paragraphId) }
   isOwnAnnotation(annotation: Annotation): boolean { return annotation.authorRole === this.state.role }
   ownerLabel(role: Role): string { return ({ author: '代理人', examiner: '审查员', viewer: '观察者' })[role] }
+
+  getParagraph(id: string): Paragraph | undefined { return this.state.paragraphs.find(item => item.id === id) }
+  evidenceFor(featureId: string, paragraphId: string): SupportEvidence | undefined {
+    return this.state.evidences.find(item => item.featureId === featureId && item.paragraphId === paragraphId)
+  }
+  evidenceStatus(evidence: SupportEvidence | undefined): EvidenceStatus {
+    if (!evidence) return 'unverified'
+    return this.service.effectiveStatus(evidence, this.state.paragraphs)
+  }
+  evidenceStatusLabel(status: EvidenceStatus): string { return evidenceStatusLabel[status] }
+  excerptMismatched(evidence: SupportEvidence | undefined): boolean { return this.evidenceStatus(evidence) === 'review' }
+  evidenceForFeature(feature: Feature): Array<{ paragraph: Paragraph; evidence: SupportEvidence | undefined; status: EvidenceStatus }> {
+    return feature.supportIds
+      .map(paragraphId => this.getParagraph(paragraphId))
+      .filter((paragraph): paragraph is Paragraph => !!paragraph)
+      .map(paragraph => {
+        const evidence = this.evidenceFor(feature.id, paragraph.id)
+        return { paragraph, evidence, status: this.evidenceStatus(evidence) }
+      })
+  }
+  updateEvidenceField(evidence: SupportEvidence, field: 'excerpt' | 'note', event: Event): void {
+    const value = (event.target as HTMLInputElement | HTMLTextAreaElement).value
+    this.service.updateEvidence(evidence.id, { [field]: value })
+  }
+  confirmEvidence(evidence: SupportEvidence): void { this.service.confirmEvidence(evidence.id) }
+  resetEvidence(evidence: SupportEvidence): void { this.service.resetEvidence(evidence.id) }
+  orphanStatusLabel(orphan: OrphanMapping): string { return evidenceStatusLabel[orphan.status] }
+  get verifiedEvidenceCount(): number {
+    return this.claimFeatures
+      .flatMap(feature => feature.supportIds.map(paragraphId => this.evidenceFor(feature.id, paragraphId)))
+      .filter(evidence => evidence && this.evidenceStatus(evidence) === 'verified').length
+  }
+  get reviewEvidenceCount(): number {
+    return this.claimFeatures
+      .flatMap(feature => feature.supportIds.map(paragraphId => this.evidenceFor(feature.id, paragraphId)))
+      .filter(evidence => evidence && this.evidenceStatus(evidence) === 'review').length
+  }
 
   updateClaimField(field: 'title' | 'text' | 'number' | 'independent', event: Event): void {
     const element = event.target as HTMLInputElement
