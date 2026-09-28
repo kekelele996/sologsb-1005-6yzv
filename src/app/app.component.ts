@@ -10,8 +10,8 @@ import { BadgeModule } from 'primeng/badge'
 import { DialogModule } from 'primeng/dialog'
 import { TooltipModule } from 'primeng/tooltip'
 import { Subscription } from 'rxjs'
-import type { Annotation, Claim, Feature, Role, ValidationIssue, WorkbenchState } from './models'
-import { WorkbenchService } from './workbench.service'
+import type { Annotation, Claim, Evidence, EvidenceState, Feature, OrphanMapping, Role, ValidationIssue, WorkbenchState } from './models'
+import { WorkbenchService, evidenceStateOf } from './workbench.service'
 
 @Component({
   selector: 'app-root',
@@ -77,6 +77,37 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   isMapped(feature: Feature, paragraphId: string): boolean { return feature.supportIds.includes(paragraphId) }
   isOwnAnnotation(annotation: Annotation): boolean { return annotation.authorRole === this.state.role }
   ownerLabel(role: Role): string { return ({ author: '代理人', examiner: '审查员', viewer: '观察者' })[role] }
+
+  getEvidence(feature: Feature, paragraphId: string): Evidence | undefined { return feature.evidence.find(item => item.paragraphId === paragraphId) }
+  evidenceState(feature: Feature, paragraphId: string): EvidenceState | null {
+    const evidence = this.getEvidence(feature, paragraphId)
+    return evidence ? evidenceStateOf(evidence, this.state.paragraphs) : null
+  }
+  evidenceStateLabel(state: EvidenceState): string { return ({ pending: '待核验', verified: '已核验', recheck: '待复核' })[state] }
+  isActiveParagraph(paragraphId: string): boolean { return this.activeIssue?.paragraphId === paragraphId }
+  get verifiedEvidenceCount(): number {
+    if (!this.selectedFeature) return 0
+    return this.selectedFeature.supportIds.filter(id => this.evidenceState(this.selectedFeature!, id) === 'verified').length
+  }
+  orphanState(orphan: OrphanMapping): EvidenceState { return orphan.evidence ? evidenceStateOf(orphan.evidence, this.state.paragraphs) : 'pending' }
+
+  canVerify(feature: Feature, paragraphId: string): boolean {
+    const evidence = this.getEvidence(feature, paragraphId)
+    return !!evidence && evidenceStateOf(evidence, this.state.paragraphs) === 'pending'
+  }
+
+  updateEvidenceExcerpt(feature: Feature, paragraphId: string, event: Event): void {
+    this.service.updateEvidence(feature.id, paragraphId, { excerpt: (event.target as HTMLTextAreaElement).value })
+  }
+
+  updateEvidenceNote(feature: Feature, paragraphId: string, event: Event): void {
+    this.service.updateEvidence(feature.id, paragraphId, { note: (event.target as HTMLInputElement).value })
+  }
+
+  useParagraphAsExcerpt(feature: Feature, paragraphId: string): void {
+    const paragraph = this.state.paragraphs.find(item => item.id === paragraphId)
+    if (paragraph) this.service.updateEvidence(feature.id, paragraphId, { excerpt: paragraph.text })
+  }
 
   updateClaimField(field: 'title' | 'text' | 'number' | 'independent', event: Event): void {
     const element = event.target as HTMLInputElement

@@ -14,6 +14,16 @@ export interface Paragraph {
   text: string
 }
 
+export type EvidenceStatus = 'pending' | 'verified'
+export type EvidenceState = EvidenceStatus | 'recheck'
+
+export interface Evidence {
+  paragraphId: string
+  excerpt: string
+  status: EvidenceStatus
+  note: string
+}
+
 export interface Feature {
   id: string
   claimId: string
@@ -22,6 +32,7 @@ export interface Feature {
   parentId: string | null
   referenceIds: string[]
   supportIds: string[]
+  evidence: Evidence[]
   ownerRole: Role
 }
 
@@ -39,6 +50,7 @@ export interface OrphanMapping {
   featureLabel: string
   paragraphId: string
   reason: string
+  evidence: Evidence | null
 }
 
 export interface ClaimVersion {
@@ -73,8 +85,9 @@ export interface WorkbenchState {
 export interface ValidationIssue {
   id: string
   severity: 'error' | 'warning'
-  type: 'cycle' | 'missing-support' | 'orphan-mapping' | 'empty-feature'
+  type: 'cycle' | 'missing-support' | 'orphan-mapping' | 'empty-feature' | 'evidence-missing' | 'evidence-recheck'
   featureId?: string
+  paragraphId?: string
   title: string
   detail: string
 }

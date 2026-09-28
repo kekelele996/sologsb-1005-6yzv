@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core'
 import { BehaviorSubject, map, type Observable } from 'rxjs'
-import type { Annotation, Claim, ClaimVersion, Feature, Paragraph, Position, Role, ValidationIssue, WorkbenchState } from './models'
+import type { Annotation, Claim, ClaimVersion, Evidence, EvidenceState, Feature, OrphanMapping, Paragraph, Position, Role, ValidationIssue, WorkbenchState } from './models'
 
 const STORAGE_KEY = 'patent-claim-mapping-workbench-v1'
 const POSITION_KEY = 'patent-claim-mapping-position-v1'
@@ -18,12 +18,45 @@ const initialParagraphs: Paragraph[] = [
   { id: 'para-0040', section: '说明书 [0040]', text: '微环境调节包括湿度调节、温度调节及气体交换。控制策略可记录执行结果，用于后续趋势判断。' }
 ]
 const initialFeatures: Feature[] = [
-  { id: 'feature-a', claimId: 'claim-1', label: 'A · 柜体', text: '柜体', parentId: null, referenceIds: [], supportIds: ['para-0012'], ownerRole: 'author' },
-  { id: 'feature-b', claimId: 'claim-1', label: 'B · 环境传感模块', text: '设置于柜体内，用于采集温湿度数据', parentId: 'feature-a', referenceIds: [], supportIds: ['para-0012', 'para-0018'], ownerRole: 'author' },
-  { id: 'feature-c', claimId: 'claim-1', label: 'C · 控制模块通信', text: '与环境传感模块通信', parentId: 'feature-a', referenceIds: ['feature-b'], supportIds: ['para-0012', 'para-0031'], ownerRole: 'author' },
-  { id: 'feature-d', claimId: 'claim-1', label: 'D · 调节微环境', text: '根据温湿度数据调节柜体微环境', parentId: null, referenceIds: ['feature-b', 'feature-c'], supportIds: ['para-0024', 'para-0040'], ownerRole: 'author' },
-  { id: 'feature-e', claimId: 'claim-2', label: 'E · 对角线布置', text: '多个温湿度传感器沿柜体对角线布置', parentId: null, referenceIds: [], supportIds: ['para-0018'], ownerRole: 'author' },
-  { id: 'feature-f', claimId: 'claim-3', label: 'F · 分级调节', text: '基于历史数据与当前数据的偏差分级调节除湿单元', parentId: null, referenceIds: [], supportIds: ['para-0024'], ownerRole: 'author' }
+  {
+    id: 'feature-a', claimId: 'claim-1', label: 'A · 柜体', text: '柜体', parentId: null, referenceIds: [], supportIds: ['para-0012'], ownerRole: 'author',
+    evidence: [
+      { paragraphId: 'para-0012', excerpt: '柜体1形成用于陈列文物的封闭空间。', status: 'verified', note: '对应“柜体”要件。' }
+    ]
+  },
+  {
+    id: 'feature-b', claimId: 'claim-1', label: 'B · 环境传感模块', text: '设置于柜体内，用于采集温湿度数据', parentId: 'feature-a', referenceIds: [], supportIds: ['para-0012', 'para-0018'], ownerRole: 'author',
+    evidence: [
+      { paragraphId: 'para-0012', excerpt: '环境传感模块2安装于柜体内部，可采集温度、相对湿度等环境数据', status: 'verified', note: '同时支持“设置于柜体内”与“采集温湿度数据”。' },
+      { paragraphId: 'para-0018', excerpt: '多个温湿度传感器沿柜体对角线布置，可降低局部气流造成的测量偏差', status: 'pending', note: '摘录漏了原文“由此”二字，与 [0018] 正文失配，需复核后重新摘录。' }
+    ]
+  },
+  {
+    id: 'feature-c', claimId: 'claim-1', label: 'C · 控制模块通信', text: '与环境传感模块通信', parentId: 'feature-a', referenceIds: ['feature-b'], supportIds: ['para-0012', 'para-0031'], ownerRole: 'author',
+    evidence: [
+      { paragraphId: 'para-0012', excerpt: '并将数据发送至控制模块3', status: 'verified', note: '' },
+      { paragraphId: 'para-0031', excerpt: '控制模块与传感模块之间可以采用有线或无线通信', status: 'pending', note: '补充通信方式的说明。' }
+    ]
+  },
+  {
+    id: 'feature-d', claimId: 'claim-1', label: 'D · 调节微环境', text: '根据温湿度数据调节柜体微环境', parentId: null, referenceIds: ['feature-b', 'feature-c'], supportIds: ['para-0024', 'para-0040'], ownerRole: 'author',
+    evidence: [
+      { paragraphId: 'para-0024', excerpt: '控制模块可比较当前湿度与预设区间，并结合历史变化趋势生成调节等级', status: 'verified', note: '' },
+      { paragraphId: 'para-0040', excerpt: '微环境调节包括湿度调节、温度调节及气体交换', status: 'pending', note: '' }
+    ]
+  },
+  {
+    id: 'feature-e', claimId: 'claim-2', label: 'E · 对角线布置', text: '多个温湿度传感器沿柜体对角线布置', parentId: null, referenceIds: [], supportIds: ['para-0018'], ownerRole: 'author',
+    evidence: [
+      { paragraphId: 'para-0018', excerpt: '多个温湿度传感器沿柜体对角线布置，由此可降低局部气流造成的测量偏差。', status: 'verified', note: '' }
+    ]
+  },
+  {
+    id: 'feature-f', claimId: 'claim-3', label: 'F · 分级调节', text: '基于历史数据与当前数据的偏差分级调节除湿单元', parentId: null, referenceIds: [], supportIds: ['para-0024'], ownerRole: 'author',
+    evidence: [
+      { paragraphId: 'para-0024', excerpt: '当偏差持续超过阈值时，控制模块启动除湿单元并提高调节频率', status: 'pending', note: '“分级”依据用前一句生成调节等级，待合并摘录后核验。' }
+    ]
+  }
 ]
 const initialAnnotations: Annotation[] = [
   { id: 'annotation-1', featureId: 'feature-b', authorRole: 'examiner', authorName: '审查员 · 李岚', text: '“温湿度数据”是否包括露点等派生数据？建议在从属权利要求中限定。', updatedAt: '2026-09-24T03:10:00.000Z' },
@@ -37,6 +70,43 @@ function demoState(): WorkbenchState {
   }
 }
 function clone<T>(value: T): T { return structuredClone(value) }
+
+/** 摘录比对前去除所有空白，避免排版与标点后的空格造成假失配。 */
+function normalizeForMatch(text: string): string {
+  return text.replace(/\s+/g, '')
+}
+
+/** 摘录必须是段落正文的连续子串（去空白后），否则视为与正文失配。 */
+export function excerptMatches(excerpt: string, paragraphText: string): boolean {
+  const needle = normalizeForMatch(excerpt)
+  if (!needle) return false
+  return normalizeForMatch(paragraphText).includes(needle)
+}
+
+/** 证据的实际核验状态：手工状态为已核验但摘录失配时强制显示“待复核”。 */
+export function evidenceStateOf(evidence: Evidence, paragraphs: Paragraph[]): EvidenceState {
+  const paragraph = paragraphs.find(item => item.id === evidence.paragraphId)
+  if (!evidence.excerpt.trim()) return 'pending'
+  if (!paragraph || !excerptMatches(evidence.excerpt, paragraph.text)) return 'recheck'
+  return evidence.status
+}
+
+/** 兼容 v1 存档：补齐证据片段数组，且同一段落可被多个特征各自引用、互不覆盖。 */
+function migrate(state: WorkbenchState): WorkbenchState {
+  state.features.forEach(feature => {
+    if (!Array.isArray(feature.evidence)) feature.evidence = []
+    feature.supportIds.forEach(paragraphId => {
+      if (!feature.evidence.some(item => item.paragraphId === paragraphId)) {
+        feature.evidence.push({ paragraphId, excerpt: '', status: 'pending', note: '' })
+      }
+    })
+    feature.evidence = feature.evidence.filter(item => feature.supportIds.includes(item.paragraphId))
+  })
+  state.orphanMappings.forEach(item => {
+    if (item.evidence === undefined) item.evidence = null
+  })
+  return state
+}
 
 @Injectable({ providedIn: 'root' })
 export class WorkbenchService implements OnDestroy {
@@ -125,7 +195,10 @@ export class WorkbenchService implements OnDestroy {
     if (this.stateSubject.value.role === 'viewer') return
     this.commit(state => {
       state.paragraphs = state.paragraphs.filter(item => item.id !== id)
-      state.features.forEach(feature => { feature.supportIds = feature.supportIds.filter(paragraphId => paragraphId !== id) })
+      state.features.forEach(feature => {
+        feature.supportIds = feature.supportIds.filter(paragraphId => paragraphId !== id)
+        feature.evidence = feature.evidence.filter(item => item.paragraphId !== id)
+      })
       state.orphanMappings = state.orphanMappings.filter(item => item.paragraphId !== id)
     })
   }
@@ -136,7 +209,7 @@ export class WorkbenchService implements OnDestroy {
       const feature: Feature = {
         id: `feature-${Date.now()}`, claimId: state.selectedClaimId,
         label: `新特征 ${state.features.filter(item => item.claimId === state.selectedClaimId).length + 1}`,
-        text: '', parentId: null, referenceIds: [], supportIds: [], ownerRole: state.role
+        text: '', parentId: null, referenceIds: [], supportIds: [], evidence: [], ownerRole: state.role
       }
       state.features.push(feature)
       state.selectedFeatureId = feature.id
@@ -156,9 +229,11 @@ export class WorkbenchService implements OnDestroy {
     this.commit(state => {
       const feature = state.features.find(item => item.id === id)
       if (!feature) return
+      // 特征删除后，支持段落映射连同已摘录的证据片段一起保留为待清理证据。
       feature.supportIds.forEach(paragraphId => state.orphanMappings.push({
-        id: `orphan-${Date.now()}-${paragraphId}`, featureLabel: feature.label, paragraphId,
-        reason: `技术特征“${feature.label}”已删除，但支持段落映射仍被保留。`
+        id: `orphan-${Date.now()}-${paragraphId}-${Math.random().toString(36).slice(2, 7)}`, featureLabel: feature.label, paragraphId,
+        reason: `技术特征“${feature.label}”已删除，但支持段落映射及证据片段仍被保留。`,
+        evidence: clone(feature.evidence.find(item => item.paragraphId === paragraphId) || { paragraphId, excerpt: '', status: 'pending' as const, note: '' })
       }))
       state.features = state.features.filter(item => item.id !== id)
       state.features.forEach(item => {
@@ -176,9 +251,54 @@ export class WorkbenchService implements OnDestroy {
       const feature = state.features.find(item => item.id === featureId)
       if (!feature) return
       const index = feature.supportIds.indexOf(paragraphId)
-      if (index >= 0) feature.supportIds.splice(index, 1)
-      else feature.supportIds.push(paragraphId)
+      if (index >= 0) {
+        feature.supportIds.splice(index, 1)
+        feature.evidence = feature.evidence.filter(item => item.paragraphId !== paragraphId)
+      } else {
+        feature.supportIds.push(paragraphId)
+        // 每条支持关系各自持有独立片段，同一段落被多个特征引用时互不覆盖。
+        if (!feature.evidence.some(item => item.paragraphId === paragraphId)) {
+          feature.evidence.push({ paragraphId, excerpt: '', status: 'pending', note: '' })
+        }
+      }
       state.orphanMappings = state.orphanMappings.filter(item => item.paragraphId !== paragraphId)
+    })
+  }
+
+  private findEvidence(state: WorkbenchState, featureId: string, paragraphId: string): Evidence | undefined {
+    return state.features.find(feature => feature.id === featureId)?.evidence.find(item => item.paragraphId === paragraphId)
+  }
+
+  /** 修改摘录或备注后回到“待核验”；摘录与正文失配时由 evidenceStateOf 派生为“待复核”。 */
+  updateEvidence(featureId: string, paragraphId: string, patch: Partial<Pick<Evidence, 'excerpt' | 'note'>>): void {
+    if (this.stateSubject.value.role === 'viewer') return
+    this.commit(state => {
+      const evidence = this.findEvidence(state, featureId, paragraphId)
+      if (!evidence) return
+      Object.assign(evidence, patch, { status: 'pending' as const })
+    })
+  }
+
+  /** 确认核验：摘录失配时拒绝确认，状态保持“待复核”。 */
+  verifyEvidence(featureId: string, paragraphId: string): void {
+    if (this.stateSubject.value.role === 'viewer') return
+    const state = this.stateSubject.value
+    const feature = state.features.find(item => item.id === featureId)
+    const evidence = feature?.evidence.find(item => item.paragraphId === paragraphId)
+    if (!feature || !evidence) return
+    const paragraph = state.paragraphs.find(item => item.id === paragraphId)
+    if (!paragraph || !excerptMatches(evidence.excerpt, paragraph.text)) return
+    this.commit(next => {
+      const target = this.findEvidence(next, featureId, paragraphId)
+      if (target) target.status = 'verified'
+    })
+  }
+
+  resetEvidence(featureId: string, paragraphId: string): void {
+    if (this.stateSubject.value.role === 'viewer') return
+    this.commit(state => {
+      const evidence = this.findEvidence(state, featureId, paragraphId)
+      if (evidence) evidence.status = 'pending'
     })
   }
 
@@ -224,7 +344,14 @@ export class WorkbenchService implements OnDestroy {
       const version = state.versions.find(item => item.id === id)
       if (!version) return
       state.claims = clone(version.claims)
-      state.features = clone(version.features)
+      // 恢复历史版本时一并带回各支持关系上的证据片段（摘录、状态、备注）。
+      state.features = clone(version.features).map(feature => {
+        const evidence = Array.isArray(feature.evidence) ? feature.evidence : []
+        feature.supportIds.forEach(paragraphId => {
+          if (!evidence.some(item => item.paragraphId === paragraphId)) evidence.push({ paragraphId, excerpt: '', status: 'pending', note: '' })
+        })
+        return { ...feature, evidence: evidence.filter(item => feature.supportIds.includes(item.paragraphId)) }
+      })
       if (!state.claims.some(claim => claim.id === state.selectedClaimId)) state.selectedClaimId = state.claims[0]?.id || ''
       state.selectedFeatureId = state.features.find(feature => feature.claimId === state.selectedClaimId)?.id || null
     })
@@ -265,13 +392,34 @@ export class WorkbenchService implements OnDestroy {
 
   exportCsv(): string {
     const state = this.stateSubject.value
-    const rows = state.features.map(feature => [
-      state.claims.find(claim => claim.id === feature.claimId)?.number || '', feature.label, feature.text,
-      state.features.find(item => item.id === feature.parentId)?.label || '',
-      feature.referenceIds.map(id => state.features.find(item => item.id === id)?.label || id).join('；'),
-      feature.supportIds.map(id => state.paragraphs.find(item => item.id === id)?.section || id).join('；')
-    ])
-    const csv = [['权利要求', '技术特征', '特征内容', '父级特征', '引用特征', '支持段落'], ...rows]
+    const evidenceLabel = (evidence: Evidence): string => ({ pending: '待核验', verified: '已核验', recheck: '待复核' })[evidenceStateOf(evidence, state.paragraphs)]
+    const rows: Array<Array<string | number>> = state.features.flatMap(feature => {
+      const claimNumber = state.claims.find(claim => claim.id === feature.claimId)?.number || ''
+      const parentLabel = state.features.find(item => item.id === feature.parentId)?.label || ''
+      const referenceLabel = feature.referenceIds.map(id => state.features.find(item => item.id === id)?.label || id).join('；')
+      if (!feature.supportIds.length) {
+        return [[claimNumber, feature.label, feature.text, parentLabel, referenceLabel, '', '', '待核验', '']]
+      }
+      return feature.supportIds.map(paragraphId => {
+        const paragraph = state.paragraphs.find(item => item.id === paragraphId)
+        const evidence = feature.evidence.find(item => item.paragraphId === paragraphId)
+        return [
+          claimNumber, feature.label, feature.text, parentLabel, referenceLabel,
+          paragraph?.section || paragraphId, evidence?.excerpt || '',
+          evidence ? evidenceLabel(evidence) : '待核验', evidence?.note || ''
+        ]
+      })
+    })
+    // 已删除特征遗留的待清理证据同样导出，含摘录与核验状态。
+    state.orphanMappings.forEach(orphan => {
+      const paragraph = state.paragraphs.find(item => item.id === orphan.paragraphId)
+      rows.push([
+        '', `（已删除特征）${orphan.featureLabel}`, '', '', '',
+        paragraph?.section || orphan.paragraphId, orphan.evidence?.excerpt || '',
+        orphan.evidence ? evidenceLabel(orphan.evidence) : '待核验', orphan.evidence?.note || orphan.reason || ''
+      ])
+    })
+    const csv = [['权利要求', '技术特征', '特征内容', '父级特征', '引用特征', '支持段落', '证据摘录', '核验状态', '备注'], ...rows]
       .map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n')
     return `\uFEFF${csv}`
   }
@@ -282,8 +430,20 @@ export class WorkbenchService implements OnDestroy {
       if (!feature.text.trim()) issues.push({ id: `empty-${feature.id}`, severity: 'warning', type: 'empty-feature', featureId: feature.id, title: `${feature.label} 内容为空`, detail: '请补全技术特征文字，避免映射对象不明确。' })
       if (!feature.supportIds.length) issues.push({ id: `support-${feature.id}`, severity: 'error', type: 'missing-support', featureId: feature.id, title: `${feature.label} 缺少说明书依据`, detail: '至少为一个说明书段落建立支持映射。' })
       if (this.hasReferenceCycle(feature, state.features)) issues.push({ id: `cycle-${feature.id}`, severity: 'error', type: 'cycle', featureId: feature.id, title: `${feature.label} 存在循环引用`, detail: '特征层级或引用关系形成闭环，请移除其中一条关系。' })
+      feature.supportIds.forEach(paragraphId => {
+        const paragraph = state.paragraphs.find(item => item.id === paragraphId)
+        const section = paragraph?.section || paragraphId
+        const evidence = feature.evidence.find(item => item.paragraphId === paragraphId)
+        if (!evidence || !evidence.excerpt.trim()) {
+          issues.push({ id: `evidence-missing-${feature.id}-${paragraphId}`, severity: 'warning', type: 'evidence-missing', featureId: feature.id, paragraphId, title: `${feature.label} 缺少证据摘录`, detail: `已映射 ${section}，但尚未摘录支撑本特征的具体语句，审查意见难以说明落点。` })
+          return
+        }
+        if (!paragraph || !excerptMatches(evidence.excerpt, paragraph.text)) {
+          issues.push({ id: `evidence-recheck-${feature.id}-${paragraphId}`, severity: 'warning', type: 'evidence-recheck', featureId: feature.id, paragraphId, title: `${feature.label} 摘录待复核`, detail: `${section} 中的证据摘录与段落正文不一致（段落可能已修改），请核对并重新摘录后再确认核验。` })
+        }
+      })
     }
-    state.orphanMappings.forEach(item => issues.push({ id: item.id, severity: 'warning', type: 'orphan-mapping', title: '存在待清理映射', detail: item.reason }))
+    state.orphanMappings.forEach(item => issues.push({ id: item.id, severity: 'warning', type: 'orphan-mapping', paragraphId: item.paragraphId, title: '存在待清理映射', detail: item.reason }))
     return issues
   }
 
@@ -326,7 +486,7 @@ export class WorkbenchService implements OnDestroy {
     if (typeof localStorage === 'undefined') return demoState()
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
-      return stored ? { ...demoState(), ...JSON.parse(stored) } : demoState()
+      return stored ? migrate({ ...demoState(), ...JSON.parse(stored) }) : demoState()
     } catch { return demoState() }
   }
 }
